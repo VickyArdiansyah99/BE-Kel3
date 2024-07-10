@@ -25,7 +25,7 @@ public record Auction(Long id, //
                       OffsetDateTime deletedAt //
 ) {
 
-    public static final String TABLE_NAME = "auction";
+    public static final String TABLE_NAME = "sk_auction";
 
     public PreparedStatement insert(final Connection connection) {
         try {
@@ -38,5 +38,7 @@ public record Auction(Long id, //
 
     public enum Status {
         WAITING_FOR_APPROVAL, APPROVED, REJECTED, CLOSED
+
+
     }
 }
