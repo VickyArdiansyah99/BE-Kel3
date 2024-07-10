@@ -3,6 +3,7 @@ package jawa.sinaukoding.sk.repository;
 import jawa.sinaukoding.sk.entity.User;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.DataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.jdbc.support.GeneratedKeyHolder;
@@ -147,4 +148,54 @@ public class UserRepository {
             return new User(id, name, email, password, role, createdBy, updatedBy, deletedBy, createdAt, updatedAt, deletedAt);
         }));
     }
+
+    public boolean updateUser(final User user) {
+        final String sql = "UPDATE " + User.TABLE_NAME + " SET name = ?, updated_at = ? WHERE id = ?";
+        try {
+            int rowsAffected = jdbcTemplate.update(con -> {
+                PreparedStatement ps = con.prepareStatement(sql);
+                ps.setString(1, user.name());
+                ps.setTimestamp(2, Timestamp.from(user.updatedAt().toInstant()));
+                ps.setLong(3, user.id());
+                return ps;
+            });
+            return rowsAffected > 0;
+        } catch (Exception e) {
+            log.error("Failed to update user: {}", e.getMessage());
+            return false;
+        }
+    }
+
+    public long resetPassword(Long userId, String newPassword) {
+        try {
+            int rowsUpdated = jdbcTemplate.update(con -> {
+                final PreparedStatement ps = con.prepareStatement("UPDATE " + User.TABLE_NAME
+                        + " SET password=?, updated_by=?, updated_at=CURRENT_TIMESTAMP WHERE id=?");
+                ps.setString(1, newPassword);
+                ps.setLong(2, userId);
+                ps.setLong(3, userId);
+                return ps;
+            });
+
+            if (rowsUpdated > 0) {
+                return userId;
+            } else {
+                return 0L;
+            }
+        } catch (DataAccessException e) {
+            System.err.println("Error updating password for user id " + userId + ": " + e.getMessage());
+            return 0L;
+        }
+    }
+
+    public long deletedUser(User user) {
+        try {
+            String sql = "UPDATE " + User.TABLE_NAME + " SET deleted_at=CURRENT_TIMESTAMP, deleted_by=? WHERE id=?";
+            return jdbcTemplate.update(sql, user.deletedBy(), user.id());
+        } catch (Exception e) {
+            log.error("Failed to soft delete user: {}", e.getMessage());
+            return 0L;
+        }
+    }
+
 }
