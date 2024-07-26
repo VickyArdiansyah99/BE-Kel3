@@ -1,8 +1,10 @@
 package jawa.sinaukoding.sk.repository;
 
 import jawa.sinaukoding.sk.entity.User;
+import jawa.sinaukoding.sk.model.Page;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.DataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.jdbc.support.GeneratedKeyHolder;
@@ -28,11 +30,18 @@ public class UserRepository {
 
     public UserRepository(JdbcTemplate jdbcTemplate) {
         this.jdbcTemplate = jdbcTemplate;
+
     }
 
-    public List<User> listUsers(int page, int size) {
-        final String sql = "SELECT * FROM %s".formatted(User.TABLE_NAME);
-        final List<User> users = jdbcTemplate.query(sql, new RowMapper<User>() {
+    public Page<User> listUsers(int page, int size) {
+        final int offset = (page - 1) * size;
+        final String sql = "SELECT * FROM %s WHERE deleted_at is NULL ORDER BY id LIMIT ? OFFSET ?".formatted(User.TABLE_NAME);
+        final String count = "SELECT COUNT(id) FROM %s".formatted(User.TABLE_NAME);
+
+        final Long totalData = jdbcTemplate.queryForObject(count, Long.class);
+        final Long totalPage = (totalData / size) + 1;
+
+        final List<User> users = jdbcTemplate.query(sql, new Object[] { size, offset }, new RowMapper<User>() {
             @Override
             public User mapRow(ResultSet rs, int rowNum) throws SQLException {
                 final User.Role role = User.Role.fromString(rs.getString("role"));
@@ -52,7 +61,7 @@ public class UserRepository {
                         deletedAt == null ? null : deletedAt.toInstant().atOffset(ZoneOffset.UTC)); //
             }
         });
-        return users;
+        return new Page<>(totalData, totalPage, page, size, users);
     }
 
     public long saveSeller(final User user) {
@@ -83,20 +92,30 @@ public class UserRepository {
         }
     }
 
-    public long updatePassword(Long userId, String newPassword) {
-        if (jdbcTemplate.update(con -> {
-            final PreparedStatement ps = con.prepareStatement("UPDATE " + User.TABLE_NAME + " SET password=? WHERE id=?");
-            ps.setString(1, newPassword);
-            ps.setLong(2, userId);
-            return ps;
-        }) > 0) {
-            return userId;
-        } else {
+    public long resetPassword(Long userId, String newPassword) {
+        try {
+            int rowsUpdated = jdbcTemplate.update(con -> {
+                final PreparedStatement ps = con.prepareStatement("UPDATE " + User.TABLE_NAME
+                        + " SET password=?, updated_by=?, updated_at=CURRENT_TIMESTAMP WHERE id=?");
+                ps.setString(1, newPassword);
+                ps.setLong(2, userId);
+                ps.setLong(3, userId);
+                return ps;
+            });
+
+            if (rowsUpdated > 0) {
+                return userId;
+            } else {
+                return 0L;
+            }
+        } catch (DataAccessException e) {
+            System.err.println("Error updating password for user id " + userId + ": " + e.getMessage());
             return 0L;
         }
     }
 
     public Optional<User> findById(final Long id) {
+        System.out.println("ID nya : " + id);
         if (id == null || id < 0) {
             return Optional.empty();
         }
@@ -130,6 +149,7 @@ public class UserRepository {
             final PreparedStatement ps = con.prepareStatement("SELECT * FROM " + User.TABLE_NAME + " WHERE email=?");
             ps.setString(1, email);
             return ps;
+
         }, rs -> {
             final Long id = rs.getLong("id");
             if (id <= 0) {
@@ -141,10 +161,42 @@ public class UserRepository {
             final Long createdBy = rs.getLong("created_by");
             final Long updatedBy = rs.getLong("updated_by");
             final Long deletedBy = rs.getLong("deleted_by");
-            final OffsetDateTime createdAt = rs.getTimestamp("created_at") == null ? null : rs.getTimestamp("created_at").toInstant().atOffset(ZoneOffset.UTC);
-            final OffsetDateTime updatedAt = rs.getTimestamp("updated_at") == null ? null : rs.getTimestamp("updated_at").toInstant().atOffset(ZoneOffset.UTC);
-            final OffsetDateTime deletedAt = rs.getTimestamp("deleted_at") == null ? null : rs.getTimestamp("deleted_at").toInstant().atOffset(ZoneOffset.UTC);
-            return new User(id, name, email, password, role, createdBy, updatedBy, deletedBy, createdAt, updatedAt, deletedAt);
+            final OffsetDateTime createdAt = rs.getTimestamp("created_at") == null ? null
+                    : rs.getTimestamp("created_at").toInstant().atOffset(ZoneOffset.UTC);
+            final OffsetDateTime updatedAt = rs.getTimestamp("updated_at") == null ? null
+                    : rs.getTimestamp("updated_at").toInstant().atOffset(ZoneOffset.UTC);
+            final OffsetDateTime deletedAt = rs.getTimestamp("deleted_at") == null ? null
+                    : rs.getTimestamp("deleted_at").toInstant().atOffset(ZoneOffset.UTC);
+            return new User(id, name, email, password, role, createdBy, updatedBy, deletedBy, createdAt, updatedAt,
+                    deletedAt);
         }));
+    }
+
+    public long deletedUser(User user) {
+        try {
+            String sql = "UPDATE " + User.TABLE_NAME + " SET deleted_at=CURRENT_TIMESTAMP, deleted_by=? WHERE id=?";
+            return jdbcTemplate.update(sql, user.deletedBy(), user.id());
+        } catch (Exception e) {
+            log.error("Failed to soft delete user: {}", e.getMessage());
+            return 0L;
+        }
+    }
+
+    public boolean updateUser(final User user) {
+        final String sql = "UPDATE " + User.TABLE_NAME + " SET name = ?, updated_at = ?, updated_by = ? WHERE id = ?";
+        try {
+            int rowsAffected = jdbcTemplate.update(con -> {
+                PreparedStatement ps = con.prepareStatement(sql);
+                ps.setString(1, user.name());
+                ps.setTimestamp(2, Timestamp.from(user.updatedAt().toInstant()));
+                ps.setLong(3, user.updatedBy());
+                ps.setLong(4, user.id());
+                return ps;
+            });
+            return rowsAffected > 0;
+        } catch (Exception e) {
+            log.error("Failed to update user: {}", e.getMessage());
+            return false;
+        }
     }
 }
